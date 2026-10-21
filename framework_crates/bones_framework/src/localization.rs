@@ -250,15 +250,25 @@ impl AssetLoader for LocalizationLoader {
                 .cloned()
                 .collect::<Vec<_>>();
 
+            // This fork ships a Vietnamese-first game: prefer the vi-VN
+            // bundle whenever it is available, then the system locale, and
+            // use the most preferred requested locale as the default.
             let en_us = LanguageIdentifier::from_str("en-US").unwrap();
+            let vi_vn = LanguageIdentifier::from_str("vi-VN").unwrap();
             let user_locale = sys_locale::get_locale()
                 .and_then(|x| x.parse::<LanguageIdentifier>().ok())
                 .unwrap_or(en_us.clone());
 
+            let mut requested = vec![user_locale.clone()];
+            if available_locales.iter().any(|l| l == &vi_vn) {
+                requested.insert(0, vi_vn.clone());
+            }
+            let default_locale = requested.first().cloned().unwrap_or(en_us);
+
             let selected_locale = fluent_langneg::negotiate_languages(
-                std::slice::from_ref(&user_locale),
+                &requested,
                 &available_locales,
-                Some(&en_us),
+                Some(&default_locale),
                 fluent_langneg::NegotiationStrategy::Filtering,
             )[0];
 
