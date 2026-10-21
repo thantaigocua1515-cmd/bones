@@ -8,7 +8,7 @@ use tracing::{info, warn};
 
 use crate::networking::get_network_endpoint;
 
-use super::{GameMessage, NetworkSocket, SocketTarget, RUNTIME};
+use super::{AnyGgrsSocket, GameMessage, NetworkSocket, SocketTarget, RUNTIME};
 
 /// The [`NetworkSocket`] implementation.
 #[derive(Debug, Clone)]
@@ -190,8 +190,8 @@ impl NetworkSocket for Socket {
         messages
     }
 
-    fn ggrs_socket(&self) -> Self {
-        self.clone()
+    fn ggrs_socket(&self) -> AnyGgrsSocket {
+        AnyGgrsSocket::Iroh(self.clone())
     }
 
     fn close(&self) {
