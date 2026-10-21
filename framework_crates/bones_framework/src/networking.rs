@@ -146,6 +146,16 @@ pub async fn get_network_endpoint() -> &'static iroh::Endpoint {
 #[schema(no_default)]
 pub struct NetworkMatchSocket(Arc<dyn NetworkSocket>);
 
+impl NetworkMatchSocket {
+    /// Create a [`NetworkMatchSocket`] from a custom [`NetworkSocket`] implementation.
+    ///
+    /// This allows a game to provide its own transport (for example a WebSocket
+    /// transport used by the web build) instead of the built-in matchmaker sockets.
+    pub fn new(socket: Arc<dyn NetworkSocket>) -> Self {
+        Self(socket)
+    }
+}
+
 /// Wraps [`ggrs::Message`] with included `match_id`, used to determine if message received
 /// from current match.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,13 +170,105 @@ pub struct GameMessage {
 pub trait GgrsSocket: NetworkSocket + ggrs::NonBlockingSocket<usize> {}
 impl<T> GgrsSocket for T where T: NetworkSocket + ggrs::NonBlockingSocket<usize> {}
 
+/// A GGRS socket backed by any supported transport.
+///
+/// [`NetworkSocket::ggrs_socket`] returns this type: the built-in transport is
+/// the iroh [`Socket`], while custom transports (such as a WebSocket socket on
+/// the web) use the [`AnyGgrsSocket::Custom`] variant.
+#[derive(Clone)]
+pub enum AnyGgrsSocket {
+    /// The built-in iroh-based socket.
+    Iroh(Socket),
+    /// A custom socket implementation.
+    Custom(Box<dyn DynGgrsSocket>),
+}
+
+/// Object-safe combination of [`NetworkSocket`] and [`ggrs::NonBlockingSocket`],
+/// used to store custom transports inside [`AnyGgrsSocket::Custom`].
+pub trait DynGgrsSocket: NetworkSocket + ggrs::NonBlockingSocket<usize> + Send + Sync {
+    /// Clone this socket into a new boxed instance.
+    fn clone_box(&self) -> Box<dyn DynGgrsSocket>;
+}
+
+impl<T> DynGgrsSocket for T
+where
+    T: NetworkSocket + ggrs::NonBlockingSocket<usize> + Send + Sync + Clone + 'static,
+{
+    fn clone_box(&self) -> Box<dyn DynGgrsSocket> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn DynGgrsSocket> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
+}
+
+impl NetworkSocket for AnyGgrsSocket {
+    fn ggrs_socket(&self) -> AnyGgrsSocket {
+        self.clone()
+    }
+    fn send_reliable(&self, target: SocketTarget, message: &[u8]) {
+        match self {
+            Self::Iroh(socket) => socket.send_reliable(target, message),
+            Self::Custom(socket) => socket.send_reliable(target, message),
+        }
+    }
+    fn recv_reliable(&self) -> Vec<(u32, Vec<u8>)> {
+        match self {
+            Self::Iroh(socket) => socket.recv_reliable(),
+            Self::Custom(socket) => socket.recv_reliable(),
+        }
+    }
+    fn close(&self) {
+        match self {
+            Self::Iroh(socket) => socket.close(),
+            Self::Custom(socket) => socket.close(),
+        }
+    }
+    fn player_idx(&self) -> u32 {
+        match self {
+            Self::Iroh(socket) => socket.player_idx(),
+            Self::Custom(socket) => socket.player_idx(),
+        }
+    }
+    fn player_count(&self) -> u32 {
+        match self {
+            Self::Iroh(socket) => socket.player_count(),
+            Self::Custom(socket) => socket.player_count(),
+        }
+    }
+    fn increment_match_id(&mut self) {
+        match self {
+            Self::Iroh(socket) => socket.increment_match_id(),
+            Self::Custom(socket) => socket.increment_match_id(),
+        }
+    }
+}
+
+impl ggrs::NonBlockingSocket<usize> for AnyGgrsSocket {
+    fn send_to(&mut self, msg: &ggrs::Message, addr: &usize) {
+        match self {
+            Self::Iroh(socket) => ggrs::NonBlockingSocket::send_to(socket, msg, addr),
+            Self::Custom(socket) => socket.send_to(msg, addr),
+        }
+    }
+    fn receive_all_messages(&mut self) -> Vec<(usize, ggrs::Message)> {
+        match self {
+            Self::Iroh(socket) => socket.receive_all_messages(),
+            Self::Custom(socket) => socket.receive_all_messages(),
+        }
+    }
+}
+
 /// Trait that must be implemented by socket connections establish by matchmakers.
 ///
 /// The [`NetworkMatchSocket`] resource will contain an instance of this trait and will be used by
 /// the game to send network messages after a match has been established.
 pub trait NetworkSocket: Sync + Send {
     /// Get a GGRS socket from this network socket.
-    fn ggrs_socket(&self) -> Socket;
+    fn ggrs_socket(&self) -> AnyGgrsSocket;
     /// Send a reliable message to the given [`SocketTarget`].
     fn send_reliable(&self, target: SocketTarget, message: &[u8]);
     /// Receive reliable messages from other players. The `usize` is the index of the player that
@@ -212,7 +314,7 @@ pub struct OnlineSyncingInfo {
     /// Anything that occurred on this frame is agreed upon by all clients.
     last_confirmed_frame: i32,
     /// Socket
-    socket: Socket,
+    socket: AnyGgrsSocket,
     /// Networking stats for each connected player, stored at the \[player_idx\] index for each respective player.
     players_network_stats: SVec<PlayerNetworkStats>,
     /// The local player's index
@@ -247,12 +349,12 @@ impl SyncingInfo {
             .unwrap_or(self.current_frame)
     }
     /// Getter for socket.
-    pub fn socket(&self) -> Option<&Socket> {
+    pub fn socket(&self) -> Option<&AnyGgrsSocket> {
         self.online_info.as_ref().map(|info| &info.socket)
     }
 
     /// Mutable getter for socket.
-    pub fn socket_mut(&mut self) -> Option<&mut Socket> {
+    pub fn socket_mut(&mut self) -> Option<&mut AnyGgrsSocket> {
         self.online_info.as_mut().map(|info| &mut info.socket)
     }
 
@@ -479,7 +581,7 @@ pub struct GgrsSessionRunner<'a, InputTypes: DenseInputConfig<'a>> {
     disconnected_players: Vec<usize>,
 
     /// Store copy of socket to be able to restart session runner with existing socket.
-    socket: Socket,
+    socket: AnyGgrsSocket,
 
     /// Local input delay ggrs session was initialized with
     local_input_delay: usize,
@@ -492,7 +594,7 @@ pub struct GgrsSessionRunner<'a, InputTypes: DenseInputConfig<'a>> {
 #[derive(Clone)]
 pub struct GgrsSessionRunnerInfo {
     /// The socket that will be converted into GGRS socket implementation.
-    pub socket: Socket,
+    pub socket: AnyGgrsSocket,
     /// The local player idx
     pub player_idx: u32,
     /// the player count.
@@ -515,7 +617,7 @@ pub struct GgrsSessionRunnerInfo {
 impl GgrsSessionRunnerInfo {
     /// See [`GgrsSessionRunnerInfo`] fields for info on arguments.
     pub fn new(
-        socket: Socket,
+        socket: AnyGgrsSocket,
         max_prediction_window: Option<usize>,
         local_input_delay: Option<usize>,
         random_seed: u64,
