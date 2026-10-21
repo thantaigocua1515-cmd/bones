@@ -1,13 +1,18 @@
 #![doc = include_str!("./networking.md")]
 
-use self::{input::NetworkControls, socket::Socket};
+use self::input::NetworkControls;
+#[cfg(not(target_arch = "wasm32"))]
+use self::socket::Socket;
 use crate::input::{DenseControl, DenseInput, DenseInputConfig};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::networking::online::OnlineMatchmakerResponse;
 pub use crate::networking::random::RngGenerator;
 use crate::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
 use bones_matchmaker_proto::{MATCH_ALPN, PLAY_ALPN};
 use ggrs::P2PSession;
 use instant::Duration;
+#[cfg(not(target_arch = "wasm32"))]
 use once_cell::sync::Lazy;
 use std::{fmt::Debug, marker::PhantomData, sync::Arc};
 use tracing::{debug, error, info, trace, warn};
@@ -18,20 +23,27 @@ use {
     ggrs::{NetworkStats, PlayerHandle},
 };
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use iroh;
 
 pub mod input;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod lan;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod online;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod online_lobby;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod online_matchmaking;
 pub mod random;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod socket;
 
 #[cfg(feature = "net-debug")]
 pub mod debug;
 
 /// Runtime, needed to execute network related calls.
+#[cfg(not(target_arch = "wasm32"))]
 pub static RUNTIME: Lazy<tokio::runtime::Runtime> =
     Lazy::new(|| tokio::runtime::Runtime::new().expect("unable to crate tokio runtime"));
 
@@ -58,9 +70,10 @@ impl From<ggrs::InputStatus> for NetworkInputStatus {
 
 /// Module prelude.
 pub mod prelude {
-    pub use super::{
-        input, lan, online, random, DisconnectedPlayers, RngGenerator, SyncingInfo, RUNTIME,
-    };
+    pub use super::{input, random, DisconnectedPlayers, RngGenerator, SyncingInfo};
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub use super::{lan, online, RUNTIME};
 
     #[cfg(feature = "net-debug")]
     pub use super::debug::prelude::*;
@@ -107,9 +120,11 @@ impl<T: DenseInput + Debug> ggrs::Config for GgrsConfig<T> {
 }
 
 /// The network endpoint used for all network communications.
+#[cfg(not(target_arch = "wasm32"))]
 static NETWORK_ENDPOINT: tokio::sync::OnceCell<iroh::Endpoint> = tokio::sync::OnceCell::const_new();
 
 /// Get the network endpoint used for all communications.
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn get_network_endpoint() -> &'static iroh::Endpoint {
     NETWORK_ENDPOINT
         .get_or_init(|| async move {
@@ -178,6 +193,7 @@ impl<T> GgrsSocket for T where T: NetworkSocket + ggrs::NonBlockingSocket<usize>
 #[derive(Clone)]
 pub enum AnyGgrsSocket {
     /// The built-in iroh-based socket.
+    #[cfg(not(target_arch = "wasm32"))]
     Iroh(Socket),
     /// A custom socket implementation.
     Custom(Box<dyn DynGgrsSocket>),
@@ -211,36 +227,42 @@ impl NetworkSocket for AnyGgrsSocket {
     }
     fn send_reliable(&self, target: SocketTarget, message: &[u8]) {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Iroh(socket) => socket.send_reliable(target, message),
             Self::Custom(socket) => socket.send_reliable(target, message),
         }
     }
     fn recv_reliable(&self) -> Vec<(u32, Vec<u8>)> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Iroh(socket) => socket.recv_reliable(),
             Self::Custom(socket) => socket.recv_reliable(),
         }
     }
     fn close(&self) {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Iroh(socket) => socket.close(),
             Self::Custom(socket) => socket.close(),
         }
     }
     fn player_idx(&self) -> u32 {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Iroh(socket) => socket.player_idx(),
             Self::Custom(socket) => socket.player_idx(),
         }
     }
     fn player_count(&self) -> u32 {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Iroh(socket) => socket.player_count(),
             Self::Custom(socket) => socket.player_count(),
         }
     }
     fn increment_match_id(&mut self) {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Iroh(socket) => socket.increment_match_id(),
             Self::Custom(socket) => socket.increment_match_id(),
         }
@@ -250,12 +272,14 @@ impl NetworkSocket for AnyGgrsSocket {
 impl ggrs::NonBlockingSocket<usize> for AnyGgrsSocket {
     fn send_to(&mut self, msg: &ggrs::Message, addr: &usize) {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Iroh(socket) => ggrs::NonBlockingSocket::send_to(socket, msg, addr),
             Self::Custom(socket) => socket.send_to(msg, addr),
         }
     }
     fn receive_all_messages(&mut self) -> Vec<(usize, ggrs::Message)> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Iroh(socket) => socket.receive_all_messages(),
             Self::Custom(socket) => socket.receive_all_messages(),
         }
@@ -642,6 +666,7 @@ where
     /// Creates a new session runner from a `OnlineMatchmakerResponse::GameStarting`
     /// Any input values set as `None` will be set to default.
     /// If response is not `GameStarting` returns None.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new_networked_game_starting(
         target_fps: Option<f32>,
         max_prediction_window: Option<usize>,
