@@ -63,7 +63,9 @@ pub mod audio;
 #[cfg(feature = "ui")]
 pub mod debug;
 
-#[cfg(not(target_arch = "wasm32"))]
+/// Networking is available on all targets: native builds use the built-in
+/// iroh transport, while web builds bring their own transport (such as a
+/// WebSocket socket) through `networking::NetworkMatchSocket::new`.
 pub mod networking;
 
 #[cfg(feature = "scripting")]
